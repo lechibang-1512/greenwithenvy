@@ -667,25 +667,27 @@ def rebuild_initramfs() -> None:
     if any(os.path.exists(dir) for dir in ['/ostree', '/sysroot/ostree']):
         command = ['rpm-ostree', 'initramfs', '--enable', '--arg=--force']
 
-    # Debian and Ubuntu derivatives
-    elif os.path.exists('/etc/debian_version'):
+    # Detect initramfs tool by command presence (more reliable than release files)
+    elif shutil.which('update-initramfs'):
         command = ['update-initramfs', '-u', '-k', 'all']
-    # RHEL and SUSE derivatives
-    elif os.path.exists('/etc/redhat-release') or os.path.exists('/usr/bin/zypper'):
-        command = ['dracut', '--force', '--regenerate-all']
-    # EndeavourOS with dracut
-    elif os.path.exists('/usr/lib/endeavouros-release') and os.path.exists('/usr/bin/dracut'):
+    elif shutil.which('dracut-rebuild'):
         command = ['dracut-rebuild']
-    # ALT Linux
-    elif os.path.exists('/etc/altlinux-release'):
+    elif shutil.which('dracut'):
+        command = ['dracut', '--force', '--regenerate-all']
+    elif shutil.which('make-initrd'):
         command = ['make-initrd']
-    # Arch Linux
-    elif os.path.exists('/etc/arch-release'):
+    elif shutil.which('mkinitcpio'):
         command = ['mkinitcpio', '-P']
+    elif os.path.exists('/usr/lib/booster/regenerate_images'):
+        command = ['/usr/lib/booster/regenerate_images']
     else:
         command = []
+        logging.warning(
+            "No supported initramfs tool found "
+            "(update-initramfs, dracut, mkinitcpio, make-initrd, or booster)")
 
     if len(command) != 0:
+        tool_name = command[0]
         if shutil.which("systemd-inhibit"):
             command = [
                 'systemd-inhibit',
@@ -695,7 +697,7 @@ def rebuild_initramfs() -> None:
                 *command
             ]
 
-        print('Rebuilding the initramfs...')
+        print(f'Rebuilding the initramfs with {tool_name}...')
         returncode = _run_cmd(command)
         if returncode == 0:
             print('Successfully rebuilt the initramfs!')
@@ -736,7 +738,9 @@ def assert_root() -> None:
 def get_current_mode() -> str:
     """Detect the current graphics mode by checking for generated config files."""
     mode = 'hybrid'
-    if os.path.exists(BLACKLIST_PATH) and (os.path.exists(UDEV_INTEGRATED_PATH) or os.path.exists('/lib/udev/rules.d/50-remove-nvidia.rules')):
+    if (os.path.exists(BLACKLIST_PATH)
+            or os.path.exists(UDEV_INTEGRATED_PATH)
+            or os.path.exists('/lib/udev/rules.d/50-remove-nvidia.rules')):
         mode = 'integrated'
     elif os.path.exists(XORG_PATH) and os.path.exists(MODESET_PATH):
         mode = 'nvidia'
@@ -757,8 +761,8 @@ class CachedConfig:
         """Context manager that provides a cached PCI bus getter for graphics_mode_switcher."""
         use_cache = os.path.exists(CACHE_FILE_PATH)
 
-        if self.is_hybrid():  # recreate cache file when in hybrid mode
-            self.create_cache_file()
+        if self.is_hybrid() and getattr(self.app_args, 'switch', None) != 'hybrid':
+            self.create_cache_file()  # cache GPU PCI bus when leaving hybrid
 
         if use_cache and not self.is_hybrid():
             self.read_cache_file()  # read existing cache when not in hybrid mode

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "envycontrol"
+dynamic = ["version"]
+description = "Easy GPU switching for Nvidia Optimus laptops under Linux"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.7"
+authors = [
+    { name = "Victor Bayas", email = "victorsbayas@gmail.com" },
+]
+keywords = ["nvidia", "optimus", "prime", "gpu", "linux"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.scripts]
+envycontrol = "envycontrol:main"
+
+[project.urls]
+Homepage = "https://github.com/bayasdev/envycontrol"
+
+[tool.setuptools]
+py-modules = ["envycontrol"]
+
+[tool.setuptools.dynamic]
+version = {attr = "envycontrol.VERSION"}
