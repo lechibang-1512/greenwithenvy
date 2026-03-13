@@ -488,9 +488,12 @@ def cleanup() -> None:
                 os.remove(file_path)
                 logging.info(f"Removed file {file_path}")
         except OSError as e:
-            # ignore ENOENT race (file removed between exists check and removal)
-            if e.errno != 2:
+            # ignore ENOENT race and EROFS on immutable distros (e.g. Fedora Kinoite)
+            if e.errno not in (2, 30):
                 logging.error(f"Failed to remove file '{file_path}': {e}")
+            elif e.errno == 30:
+                logging.debug(
+                    f"Skipping read-only file '{file_path}' (immutable filesystem)")
 
     # restore Xsetup backup if found
     backup_path = SDDM_XSETUP_PATH + ".bak"
