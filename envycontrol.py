@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import logging
 import os
@@ -7,6 +9,7 @@ import subprocess
 import sys
 import shutil
 from contextlib import contextmanager
+from typing import Callable, Optional
 
 # begin constants definition
 
@@ -226,139 +229,242 @@ SUPPORTED_MODES = ['integrated', 'hybrid', 'nvidia']
 SUPPORTED_DISPLAY_MANAGERS = ['gdm', 'gdm3', 'sddm', 'lightdm']
 RTD3_MODES = [0, 1, 2, 3]
 
+# PCI vendor IDs for reliable GPU detection
+_VENDOR_NVIDIA = '10de'
+_VENDOR_INTEL = '8086'
+_VENDOR_AMD = '1002'
+_VENDOR_QUALCOMM = '17cb'
+
+# PCI class codes for graphics devices
+_GPU_CLASS_CODES = ('0300', '0302', '0380')
+
+# Mapping of PCI vendor IDs to iGPU vendor names
+_IGPU_VENDOR_MAP: dict[str, str] = {
+    _VENDOR_INTEL: 'intel',
+    _VENDOR_AMD: 'amd',
+    _VENDOR_QUALCOMM: 'qualcomm',
+}
+
+# Regex for parsing lspci -Dnn output lines
+# Example: "0000:01:00.0 VGA compatible controller [0300]: NVIDIA Corporation GA107M [GeForce RTX 3050 Ti Mobile] [10de:25a0] (rev a1)"
+_LSPCI_PATTERN = re.compile(
+    r'^(?P<domain>[0-9a-fA-F]{4}):(?P<slot>[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])'
+    r'\s+(?P<class_name>.+?)\s+\[(?P<class_id>[0-9a-fA-F]{4})\]:\s+'
+    r'(?P<description>.+?)\s+\[(?P<vendor_id>[0-9a-fA-F]{4}):(?P<device_id>[0-9a-fA-F]{4})\]'
+)
+
 # end constants definition
 
 
-def graphics_mode_switcher(graphics_mode, user_display_manager, enable_force_comp, coolbits_value, rtd3_value, use_nvidia_current):
-    print(f"Switching to {graphics_mode} mode")
+def _run_cmd(command: list[str], error_msg: str = "Command failed") -> int:
+    """Run a subprocess, suppressing output unless verbose mode is enabled."""
+    if logging.getLogger().level == logging.DEBUG:
+        result = subprocess.run(command)
+    else:
+        result = subprocess.run(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return result.returncode
 
-    if graphics_mode == 'integrated':
 
-        if logging.getLogger().level == logging.DEBUG:
-            service = subprocess.run(
-                ["systemctl", "disable", "nvidia-persistenced.service"])
+def _get_gpu_names() -> tuple[Optional[str], Optional[str]]:
+    """Return (igpu_name, dgpu_name) human-readable model names from detected GPUs."""
+    devices = _parse_gpu_devices()
+    igpu_name = None
+    dgpu_name = None
+    for d in devices:
+        if d['vendor_id'] == _VENDOR_NVIDIA:
+            if dgpu_name is None:
+                dgpu_name = d['description']
         else:
-            service = subprocess.run(
-                ["systemctl", "disable", "nvidia-persistenced.service"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if service.returncode == 0:
-            print('Successfully disabled nvidia-persistenced.service')
-        else:
-            logging.error("An error ocurred while disabling service")
+            if igpu_name is None:
+                igpu_name = d['description']
+    return igpu_name, dgpu_name
 
-        cleanup()
 
-        # blacklist all nouveau, nova and Nvidia modules
-        create_file(BLACKLIST_PATH, BLACKLIST_CONTENT)
+def _print_gpu_status(mode: str, igpu_name: Optional[str], dgpu_name: Optional[str]) -> None:
+    """Print a summary of which GPUs are active/inactive for a given mode."""
+    igpu_label = igpu_name or 'Integrated GPU'
+    dgpu_label = dgpu_name or 'Nvidia dGPU'
 
-        # power off the Nvidia GPU with udev rules
-        create_file(UDEV_INTEGRATED_PATH, UDEV_INTEGRATED)
+    if mode == 'integrated':
+        print(f"  ✓ ACTIVE:   {igpu_label}")
+        print(f"  ✗ DISABLED: {dgpu_label}")
+    elif mode == 'hybrid':
+        print(f"  ✓ ACTIVE:   {igpu_label} (primary)")
+        print(f"  ✓ ACTIVE:   {dgpu_label} (on-demand)")
+    elif mode == 'nvidia':
+        print(f"  ✗ INACTIVE: {igpu_label}")
+        print(f"  ✓ ACTIVE:   {dgpu_label} (primary)")
 
-        rebuild_initramfs()
-    elif graphics_mode == 'hybrid':
-        print(
-            f"Enable PCI-Express Runtime D3 (RTD3) Power Management: {rtd3_value or False}")
-        cleanup()
 
-        if logging.getLogger().level == logging.DEBUG:
-            service = subprocess.run(
-                ["systemctl", "enable", "nvidia-persistenced.service"])
-        else:
-            service = subprocess.run(
-                ["systemctl", "enable", "nvidia-persistenced.service"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if service.returncode == 0:
-            print('Successfully enabled nvidia-persistenced.service')
-        else:
-            logging.error("An error ocurred while enabling service")
+def _manage_persistenced(action: str) -> None:
+    """Enable or disable the nvidia-persistenced systemd service."""
+    returncode = _run_cmd(
+        ["systemctl", action, "nvidia-persistenced.service"])
+    if returncode == 0:
+        print(f'Successfully {action}d nvidia-persistenced.service')
+    else:
+        logging.error(
+            f"An error occurred while running 'systemctl {action}' for nvidia-persistenced")
 
-        if rtd3_value == None:
-            if use_nvidia_current:
-                create_file(MODESET_PATH, MODESET_CURRENT_CONTENT)
-            else:
-                create_file(MODESET_PATH, MODESET_CONTENT)
-        else:
-            # setup rtd3
-            if use_nvidia_current:
-                create_file(
-                    MODESET_PATH, MODESET_CURRENT_RTD3.format(rtd3_value))
-            else:
-                create_file(MODESET_PATH, MODESET_RTD3.format(rtd3_value))
-            create_file(UDEV_PM_PATH, UDEV_PM_CONTENT)
 
-        rebuild_initramfs()
-    elif graphics_mode == 'nvidia':
-        print(f"Enable ForceCompositionPipeline: {enable_force_comp}")
-        print(f"Enable Coolbits: {coolbits_value or False}")
+def _switch_integrated(use_nvidia_current: bool) -> None:
+    """Switch to integrated graphics mode (iGPU only, dGPU powered off)."""
+    _manage_persistenced("disable")
+    cleanup()
 
-        if logging.getLogger().level == logging.DEBUG:
-            service = subprocess.run(
-                ["systemctl", "enable", "nvidia-persistenced.service"])
-        else:
-            service = subprocess.run(
-                ["systemctl", "enable", "nvidia-persistenced.service"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if service.returncode == 0:
-            print('Successfully enabled nvidia-persistenced.service')
-        else:
-            logging.error("An error ocurred while enabling service")
+    # blacklist all nouveau, nova and Nvidia modules
+    create_file(BLACKLIST_PATH, BLACKLIST_CONTENT)
 
-        cleanup()
-        # get the Nvidia dGPU PCI bus
-        nvidia_gpu_pci_bus = get_nvidia_gpu_pci_bus()
+    # power off the Nvidia GPU with udev rules
+    create_file(UDEV_INTEGRATED_PATH, UDEV_INTEGRATED)
 
-        # get iGPU vendor
-        igpu_vendor = get_igpu_vendor()
+    rebuild_initramfs()
 
-        # create the X.org config
-        if igpu_vendor == 'intel':
-            create_file(XORG_PATH, XORG_INTEL.format(nvidia_gpu_pci_bus))
-        elif igpu_vendor == 'amd':
-            create_file(XORG_PATH, XORG_AMD.format(nvidia_gpu_pci_bus))
 
-        # enable modeset for Nvidia driver
+def _switch_hybrid(
+    rtd3_value: Optional[int],
+    use_nvidia_current: bool,
+) -> None:
+    """Switch to hybrid graphics mode (PRIME offloading with optional RTD3)."""
+    print(
+        f"Enable PCI-Express Runtime D3 (RTD3) Power Management: {rtd3_value or False}")
+    cleanup()
+    _manage_persistenced("enable")
+
+    if rtd3_value is None:
         if use_nvidia_current:
             create_file(MODESET_PATH, MODESET_CURRENT_CONTENT)
         else:
             create_file(MODESET_PATH, MODESET_CONTENT)
-
-        # extra Xorg config
-        if enable_force_comp and coolbits_value != None:
-            create_file(EXTRA_XORG_PATH, EXTRA_XORG_CONTENT + FORCE_COMP +
-                        COOLBITS.format(coolbits_value) + 'EndSection\n')
-        elif enable_force_comp:
-            create_file(EXTRA_XORG_PATH, EXTRA_XORG_CONTENT +
-                        FORCE_COMP + 'EndSection\n')
-        elif coolbits_value != None:
-            create_file(EXTRA_XORG_PATH, EXTRA_XORG_CONTENT +
-                        COOLBITS.format(coolbits_value) + 'EndSection\n')
-
-        # try to detect the display manager if not provided
-        if user_display_manager == None:
-            display_manager = get_display_manager()
+    else:
+        # setup rtd3
+        if use_nvidia_current:
+            create_file(
+                MODESET_PATH, MODESET_CURRENT_RTD3.format(rtd3_value))
         else:
-            display_manager = user_display_manager
+            create_file(MODESET_PATH, MODESET_RTD3.format(rtd3_value))
+        create_file(UDEV_PM_PATH, UDEV_PM_CONTENT)
 
-        # only sddm and lightdm require further config
-        if display_manager == 'sddm':
-            # backup Xsetup
-            if os.path.exists(SDDM_XSETUP_PATH):
-                logging.info("Creating Xsetup backup")
-                with open(SDDM_XSETUP_PATH, mode='r', encoding='utf-8') as f:
-                    create_file(SDDM_XSETUP_PATH+'.bak', f.read())
-            create_file(SDDM_XSETUP_PATH,
-                        generate_xrandr_script(igpu_vendor), True)
-        elif display_manager == 'lightdm':
-            create_file(LIGHTDM_SCRIPT_PATH,
-                        generate_xrandr_script(igpu_vendor), True)
-            create_file(LIGHTDM_CONFIG_PATH, LIGHTDM_CONFIG_CONTENT)
+    rebuild_initramfs()
 
-        rebuild_initramfs()
+
+def _switch_nvidia(
+    user_display_manager: Optional[str],
+    enable_force_comp: bool,
+    coolbits_value: Optional[int],
+    use_nvidia_current: bool,
+    pci_bus_getter: Optional[Callable[[], str]] = None,
+) -> None:
+    """Switch to dedicated Nvidia graphics mode (dGPU only)."""
+    print(f"Enable ForceCompositionPipeline: {enable_force_comp}")
+    print(f"Enable Coolbits: {coolbits_value or False}")
+
+    _manage_persistenced("enable")
+    cleanup()
+
+    # get the Nvidia dGPU PCI bus
+    nvidia_gpu_pci_bus = (pci_bus_getter or get_nvidia_gpu_pci_bus)()
+
+    # get iGPU vendor
+    igpu_vendor = get_igpu_vendor()
+
+    # create the X.org config
+    if igpu_vendor == 'intel':
+        create_file(XORG_PATH, XORG_INTEL.format(nvidia_gpu_pci_bus))
+    elif igpu_vendor == 'amd':
+        create_file(XORG_PATH, XORG_AMD.format(nvidia_gpu_pci_bus))
+    else:
+        logging.warning(
+            f"No Xorg configuration template for iGPU vendor '{igpu_vendor}'. "
+            f"Nvidia mode may not work correctly without a manual xorg.conf.")
+
+    # enable modeset for Nvidia driver
+    if use_nvidia_current:
+        create_file(MODESET_PATH, MODESET_CURRENT_CONTENT)
+    else:
+        create_file(MODESET_PATH, MODESET_CONTENT)
+
+    # extra Xorg config
+    if enable_force_comp and coolbits_value is not None:
+        create_file(EXTRA_XORG_PATH, EXTRA_XORG_CONTENT + FORCE_COMP +
+                    COOLBITS.format(coolbits_value) + 'EndSection\n')
+    elif enable_force_comp:
+        create_file(EXTRA_XORG_PATH, EXTRA_XORG_CONTENT +
+                    FORCE_COMP + 'EndSection\n')
+    elif coolbits_value is not None:
+        create_file(EXTRA_XORG_PATH, EXTRA_XORG_CONTENT +
+                    COOLBITS.format(coolbits_value) + 'EndSection\n')
+
+    # try to detect the display manager if not provided
+    if user_display_manager is None:
+        display_manager = get_display_manager()
+    else:
+        display_manager = user_display_manager
+
+    # warn if the display manager is not supported
+    if display_manager is not None and display_manager not in SUPPORTED_DISPLAY_MANAGERS:
+        logging.warning(
+            f"Display manager '{display_manager}' is not supported by EnvyControl. "
+            f"Supported display managers: {', '.join(SUPPORTED_DISPLAY_MANAGERS)}. "
+            f"Nvidia mode may result in a black screen without manual xrandr configuration.")
+
+    # only sddm and lightdm require further config
+    if display_manager == 'sddm':
+        # backup Xsetup
+        if os.path.exists(SDDM_XSETUP_PATH):
+            logging.info("Creating Xsetup backup")
+            with open(SDDM_XSETUP_PATH, mode='r', encoding='utf-8') as f:
+                create_file(SDDM_XSETUP_PATH+'.bak', f.read())
+        create_file(SDDM_XSETUP_PATH,
+                    generate_xrandr_script(igpu_vendor), True)
+    elif display_manager == 'lightdm':
+        create_file(LIGHTDM_SCRIPT_PATH,
+                    generate_xrandr_script(igpu_vendor), True)
+        create_file(LIGHTDM_CONFIG_PATH, LIGHTDM_CONFIG_CONTENT)
+
+    rebuild_initramfs()
+
+
+def graphics_mode_switcher(
+    graphics_mode: str,
+    user_display_manager: Optional[str],
+    enable_force_comp: bool,
+    coolbits_value: Optional[int],
+    rtd3_value: Optional[int],
+    use_nvidia_current: bool,
+    pci_bus_getter: Optional[Callable[[], str]] = None,
+) -> None:
+    """Switch between integrated, hybrid, and nvidia graphics modes."""
+    current_mode = get_current_mode()
+    igpu_name, dgpu_name = _get_gpu_names()
+
+    print(f"Switching graphics mode: {current_mode} → {graphics_mode}")
+    print()
+    print("Before:")
+    _print_gpu_status(current_mode, igpu_name, dgpu_name)
+    print()
+
+    if graphics_mode == 'integrated':
+        _switch_integrated(use_nvidia_current)
+    elif graphics_mode == 'hybrid':
+        _switch_hybrid(rtd3_value, use_nvidia_current)
+    elif graphics_mode == 'nvidia':
+        _switch_nvidia(
+            user_display_manager, enable_force_comp,
+            coolbits_value, use_nvidia_current, pci_bus_getter,
+        )
+
+    print()
+    print("After (takes effect on next reboot):")
+    _print_gpu_status(graphics_mode, igpu_name, dgpu_name)
+    print()
     print('Operation completed successfully')
     print('Please reboot your computer for changes to take effect!')
 
 
-def cleanup():
+def cleanup() -> None:
+    """Remove all EnvyControl-generated config files and restore backups."""
     # define list of files to remove
     to_remove = [
         BLACKLIST_PATH,
@@ -382,7 +488,7 @@ def cleanup():
                 os.remove(file_path)
                 logging.info(f"Removed file {file_path}")
         except OSError as e:
-            # only warn if file exists (code 2)
+            # ignore ENOENT race (file removed between exists check and removal)
             if e.errno != 2:
                 logging.error(f"Failed to remove file '{file_path}': {e}")
 
@@ -397,41 +503,103 @@ def cleanup():
         logging.info(f"Removed file {backup_path}")
 
 
-def get_nvidia_gpu_pci_bus():
-    lspci_output = subprocess.check_output(['lspci']).decode('utf-8')
+def _parse_gpu_devices() -> list[dict]:
+    """Parse lspci -Dnn output and return all graphics devices as structured dicts."""
+    try:
+        lspci_output = subprocess.check_output(
+            ['lspci', '-Dnn']).decode('utf-8')
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        logging.error("Failed to run 'lspci -Dnn'. Is pciutils installed?")
+        return []
+
+    devices = []
     for line in lspci_output.splitlines():
-        if 'NVIDIA' in line and ('VGA compatible controller' in line or '3D controller' in line):
-            # remove leading zeros
-            pci_bus_id = line.split()[0].replace("0000:", "")
-            logging.info(f"Found Nvidia GPU at {pci_bus_id}")
-            break
-    else:
-        logging.error("Could not find Nvidia GPU")
-        print("Try switching to hybrid mode first!")
+        match = _LSPCI_PATTERN.match(line)
+        if not match:
+            continue
+
+        class_id = match.group('class_id').lower()
+        if class_id not in _GPU_CLASS_CODES:
+            continue
+
+        device = {
+            'domain': match.group('domain'),
+            'slot': match.group('slot'),
+            'class_name': match.group('class_name').strip(),
+            'class_id': class_id,
+            'description': match.group('description').strip(),
+            'vendor_id': match.group('vendor_id').lower(),
+            'device_id': match.group('device_id').lower(),
+        }
+        devices.append(device)
+        logging.info(
+            f"Detected GPU: [{device['vendor_id']}:{device['device_id']}] "
+            f"{device['description']} at {device['domain']}:{device['slot']} "
+            f"(class {device['class_id']}: {device['class_name']})")
+
+    return devices
+
+
+def get_nvidia_gpu_pci_bus() -> str:
+    """Detect the Nvidia dGPU PCI bus ID via lspci and return in PCI:bus:dev:fn format."""
+    devices = _parse_gpu_devices()
+    nvidia_gpus = [d for d in devices if d['vendor_id'] == _VENDOR_NVIDIA]
+
+    if not nvidia_gpus:
+        logging.error(
+            "Could not find Nvidia GPU on the PCI bus. "
+            "If you are switching from integrated mode, the dGPU may have been "
+            "powered off by EnvyControl's udev rules. To recover:\n"
+            "  1. Run 'sudo envycontrol --reset' to remove all EnvyControl config\n"
+            "  2. Reboot to restore the GPU on the PCI bus\n"
+            "  3. Then switch to your desired mode with 'sudo envycontrol -s <mode>'")
         sys.exit(1)
 
-    # need to return the BusID in 'PCI:bus:device:function' format
-    # also perform hexadecimal to decimal conversion
+    if len(nvidia_gpus) > 1:
+        logging.warning(
+            f"Found {len(nvidia_gpus)} Nvidia GPUs, using the first one: "
+            f"{nvidia_gpus[0]['description']}")
+
+    gpu = nvidia_gpus[0]
+    pci_bus_id = gpu['slot']  # format: "bus:device.function" e.g. "01:00.0"
+    logging.info(f"Using Nvidia GPU: {gpu['description']} at {gpu['slot']}")
+
+    # return BusID in 'PCI:bus:device:function' format with hex-to-decimal conversion
     bus, device_function = pci_bus_id.split(":")
     device, function = device_function.split(".")
     return f"PCI:{int(bus, 16)}:{int(device, 16)}:{int(function, 16)}"
 
 
-def get_igpu_vendor():
-    lspci_output = subprocess.check_output(["lspci"]).decode('utf-8')
-    for line in lspci_output.splitlines():
-        if 'VGA compatible controller' in line or 'Display controller' in line:
-            if 'Intel' in line:
-                logging.info("Found Intel iGPU")
-                return 'intel'
-            elif 'ATI' in line or 'AMD' in line or 'AMD/ATI' in line:
-                logging.info("Found AMD iGPU")
-                return 'amd'
-    logging.warning("Could not find Intel or AMD iGPU")
+def get_igpu_vendor() -> Optional[str]:
+    """Detect the integrated GPU vendor via PCI vendor ID, skipping Nvidia devices."""
+    devices = _parse_gpu_devices()
+
+    for device in devices:
+        # skip Nvidia dGPUs
+        if device['vendor_id'] == _VENDOR_NVIDIA:
+            continue
+
+        vendor_name = _IGPU_VENDOR_MAP.get(device['vendor_id'])
+        if vendor_name:
+            logging.info(
+                f"Found {vendor_name} iGPU: {device['description']} "
+                f"(vendor {device['vendor_id']})")
+            return vendor_name
+
+    # fallback: log all detected vendor IDs for debugging
+    vendor_ids = {d['vendor_id'] for d in devices if d['vendor_id'] != _VENDOR_NVIDIA}
+    if vendor_ids:
+        logging.warning(
+            f"Found non-Nvidia GPU(s) with unrecognized vendor ID(s): "
+            f"{', '.join(sorted(vendor_ids))}. "
+            f"Please report this at https://github.com/bayasdev/envycontrol/issues")
+    else:
+        logging.warning("Could not find any integrated GPU")
     return None
 
 
-def get_display_manager():
+def get_display_manager() -> Optional[str]:
+    """Auto-detect the active display manager from systemd service config."""
     try:
         with open('/etc/systemd/system/display-manager.service', 'r', encoding='utf-8') as f:
             content = f.read()
@@ -443,14 +611,16 @@ def get_display_manager():
                 return display_manager
     except FileNotFoundError:
         logging.warning("Display Manager detection is not available")
+    return None
 
 
-def generate_xrandr_script(igpu_vendor):
+def generate_xrandr_script(igpu_vendor: Optional[str]) -> str:
+    """Generate an xrandr provider output source script for the given iGPU vendor."""
     if igpu_vendor == 'intel':
         return NVIDIA_XRANDR_SCRIPT.format('modesetting')
     elif igpu_vendor == 'amd':
         amd_igpu_name = get_amd_igpu_name()
-        if amd_igpu_name != None:
+        if amd_igpu_name is not None:
             return NVIDIA_XRANDR_SCRIPT.format(amd_igpu_name)
         else:
             return NVIDIA_XRANDR_SCRIPT.format('modesetting')
@@ -458,33 +628,40 @@ def generate_xrandr_script(igpu_vendor):
         return NVIDIA_XRANDR_SCRIPT.format('modesetting')
 
 
-def get_amd_igpu_name():
-    if not os.path.exists('/usr/bin/xrandr'):
+def get_amd_igpu_name() -> Optional[str]:
+    """Detect the AMD iGPU provider name from xrandr output."""
+    xrandr_path = shutil.which('xrandr')
+    if not xrandr_path:
         logging.warning(
             "The 'xrandr' command is not available. Make sure the package is installed!")
         return None
 
     try:
         xrandr_output = subprocess.check_output(
-            ['xrandr', '--listproviders']).decode('utf-8')
+            [xrandr_path, '--listproviders']).decode('utf-8')
     except subprocess.CalledProcessError:
         logging.warning(
             "Failed to run the 'xrandr' command.")
+        return None
 
-    pattern = re.compile(r'(name:).*(ATI*|AMD*|AMD\/ATI)*')
+    # Match provider names containing ATI, AMD, or AMD/ATI
+    pattern = re.compile(r'name:\s*((?:AMD/ATI|AMD|ATI)\S*)')
 
-    if pattern.findall(xrandr_output):
-        return re.search(pattern, xrandr_output).group(0)[5:]
+    match = pattern.search(xrandr_output)
+    if match:
+        name = match.group(1)
+        logging.info(f"Found AMD iGPU xrandr provider: {name}")
+        return name
     else:
         logging.warning(
             "Could not find AMD iGPU in 'xrandr' output.")
         return None
 
 
-def rebuild_initramfs():
+def rebuild_initramfs() -> None:
+    """Rebuild the initramfs using the appropriate distro-specific tool."""
     # OSTree systems first
     if any(os.path.exists(dir) for dir in ['/ostree', '/sysroot/ostree']):
-        print('Rebuilding the initramfs with rpm-ostree...')
         command = ['rpm-ostree', 'initramfs', '--enable', '--arg=--force']
 
     # Debian and Ubuntu derivatives
@@ -505,29 +682,29 @@ def rebuild_initramfs():
     else:
         command = []
 
-    if shutil.which("systemd-inhibit"):
-        command = [
-            'systemd-inhibit',
-            '--who=envycontrol',
-            '--why', 'Rebuilding initramfs',
-            '--',
-            *command
-        ]
-
     if len(command) != 0:
+        if shutil.which("systemd-inhibit"):
+            command = [
+                'systemd-inhibit',
+                '--who=envycontrol',
+                '--why', 'Rebuilding initramfs',
+                '--',
+                *command
+            ]
+
         print('Rebuilding the initramfs...')
-        if logging.getLogger().level == logging.DEBUG:
-            p = subprocess.run(command)
-        else:
-            p = subprocess.run(
-                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if p.returncode == 0:
+        returncode = _run_cmd(command)
+        if returncode == 0:
             print('Successfully rebuilt the initramfs!')
         else:
-            logging.error("An error ocurred while rebuilding the initramfs")
+            logging.warning(
+                "The initramfs rebuild command exited with a non-zero status. "
+                "This may be caused by missing firmware warnings rather than a "
+                "real failure. Check the output above with --verbose for details.")
 
 
-def create_file(path, content, executable=False):
+def create_file(path: str, content: str, executable: bool = False) -> None:
+    """Write content to a file, creating parent directories as needed."""
     try:
         # create the parent folders if needed
         if not os.path.exists(os.path.dirname(path)):
@@ -546,13 +723,125 @@ def create_file(path, content, executable=False):
         logging.error(f"Failed to create file '{path}': {e}")
 
 
-def assert_root():
+def assert_root() -> None:
+    """Exit with an error if not running as root."""
     if os.geteuid() != 0:
         logging.error("This operation requires root privileges")
         sys.exit(1)
 
 
-def main():
+def get_current_mode() -> str:
+    """Detect the current graphics mode by checking for generated config files."""
+    mode = 'hybrid'
+    if os.path.exists(BLACKLIST_PATH) and (os.path.exists(UDEV_INTEGRATED_PATH) or os.path.exists('/lib/udev/rules.d/50-remove-nvidia.rules')):
+        mode = 'integrated'
+    elif os.path.exists(XORG_PATH) and os.path.exists(MODESET_PATH):
+        mode = 'nvidia'
+    return mode
+
+
+class CachedConfig:
+    """Adapter for reading/writing the Nvidia PCI bus ID cache file."""
+
+    def __init__(self, app_args: argparse.Namespace) -> None:
+        self.app_args = app_args
+        self.current_mode = get_current_mode()
+        self.nvidia_gpu_pci_bus: Optional[str] = None
+        self.obj: Optional[dict] = None
+
+    @contextmanager
+    def adapter(self):
+        """Context manager that provides a cached PCI bus getter for graphics_mode_switcher."""
+        use_cache = os.path.exists(CACHE_FILE_PATH)
+
+        if self.is_hybrid():  # recreate cache file when in hybrid mode
+            self.create_cache_file()
+
+        if use_cache and not self.is_hybrid():
+            self.read_cache_file()  # read existing cache when not in hybrid mode
+
+        yield self
+
+    def get_pci_bus_getter(self) -> Callable[[], str]:
+        """Return a callable that provides the Nvidia PCI bus ID (cached or live)."""
+        if self.nvidia_gpu_pci_bus is not None:
+            return self._get_nvidia_gpu_pci_bus
+        return get_nvidia_gpu_pci_bus
+
+    def create_cache_file(self) -> None:
+        """Create the cache file with the current Nvidia PCI bus ID. Only works in hybrid mode."""
+        if not self.is_hybrid():
+            raise ValueError(
+                '--cache-create requires that the system be in the hybrid Optimus mode')
+
+        self.nvidia_gpu_pci_bus = get_nvidia_gpu_pci_bus()
+        self.obj = self._create_cache_obj(self.nvidia_gpu_pci_bus)
+        self._write_cache_file()
+
+    @staticmethod
+    def _create_cache_obj(nvidia_gpu_pci_bus: str) -> dict:
+        """Build the cache dictionary."""
+        return {
+            'nvidia_gpu_pci_bus': nvidia_gpu_pci_bus
+        }
+
+    def is_hybrid(self) -> bool:
+        """Check if the system is currently in hybrid mode."""
+        return 'hybrid' == self.current_mode
+
+    def _get_nvidia_gpu_pci_bus(self) -> str:
+        """Return the cached Nvidia PCI bus ID."""
+        return self.nvidia_gpu_pci_bus
+
+    @staticmethod
+    def delete_cache_file() -> None:
+        """Delete the cache file and its parent directory if they exist."""
+        if os.path.exists(CACHE_FILE_PATH):
+            os.remove(CACHE_FILE_PATH)
+            logging.debug(f"Removed file {CACHE_FILE_PATH}")
+        cache_dir = os.path.dirname(CACHE_FILE_PATH)
+        if os.path.isdir(cache_dir):
+            try:
+                os.removedirs(cache_dir)
+            except OSError:
+                pass
+
+    def read_cache_file(self) -> None:
+        """Read the cache file and populate instance attributes."""
+        from json import loads
+        if os.path.exists(CACHE_FILE_PATH):
+            with open(CACHE_FILE_PATH, 'r', encoding='utf-8') as f:
+                content = f.read()
+            self.obj = loads(content)
+            self.nvidia_gpu_pci_bus = self.obj['nvidia_gpu_pci_bus']
+        elif self.is_hybrid():
+            self.nvidia_gpu_pci_bus = get_nvidia_gpu_pci_bus()
+        else:
+            raise ValueError(
+                'No cache present. Operation requires that the system be in the hybrid Optimus mode')
+
+    @staticmethod
+    def show_cache_file() -> None:
+        """Print the contents of the cache file, or an error message if it doesn't exist."""
+        content = f'ERROR: Could not read {CACHE_FILE_PATH}'
+        if os.path.exists(CACHE_FILE_PATH):
+            with open(CACHE_FILE_PATH, 'r', encoding='utf-8') as f:
+                content = f.read()
+        print(content)
+
+    def _write_cache_file(self) -> None:
+        """Write the cache object to disk as JSON."""
+        from json import dump
+        os.makedirs(os.path.dirname(CACHE_FILE_PATH), exist_ok=True)
+
+        with open(CACHE_FILE_PATH, 'w', encoding='utf-8') as f:
+            dump(self.obj, fp=f, indent=4, sort_keys=False)
+
+        logging.debug(f"Created file {CACHE_FILE_PATH}")
+
+
+def main() -> None:
+    """Entry point: parse CLI arguments and dispatch to the appropriate action."""
     # define CLI arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--version', action='version', version=VERSION,
@@ -615,12 +904,14 @@ def main():
         return
 
     if args.switch or args.reset_sddm or args.reset:
-        with CachedConfig(args).adapter():
+        with CachedConfig(args).adapter() as cached_config:
             if args.switch:
                 assert_root()
                 graphics_mode_switcher(
                     args.switch, args.dm,
-                    args.force_comp, args.coolbits, args.rtd3, args.use_nvidia_current
+                    args.force_comp, args.coolbits, args.rtd3,
+                    args.use_nvidia_current,
+                    pci_bus_getter=cached_config.get_pci_bus_getter(),
                 )
             elif args.reset_sddm:
                 assert_root()
@@ -632,95 +923,6 @@ def main():
                 CachedConfig.delete_cache_file()
                 rebuild_initramfs()
                 print('Operation completed successfully')
-
-
-class CachedConfig:
-    '''Adapter for config from CACHE_FILE_PATH'''
-
-    def __init__(self, app_args) -> None:
-        self.app_args = app_args
-        self.current_mode = get_current_mode()
-
-    @contextmanager
-    def adapter(self):
-        global get_nvidia_gpu_pci_bus
-        use_cache = os.path.exists(CACHE_FILE_PATH)
-
-        if self.is_hybrid():  # recreate cache file when in hybrid mode
-            self.create_cache_file()
-
-        if use_cache:
-            self.read_cache_file()  # might not be in hybrid mode
-
-            # rebind function to use cached value instead of detection
-            get_nvidia_gpu_pci_bus = self.get_nvidia_gpu_pci_bus
-
-        yield  # back to main ...
-
-    def create_cache_file(self):
-        if not self.is_hybrid():
-            raise ValueError(
-                '--cache-create requires that the system be in the hybrid Optimus mode')
-
-        self.nvidia_gpu_pci_bus = get_nvidia_gpu_pci_bus()
-        self.obj = self.create_cache_obj(self.nvidia_gpu_pci_bus)
-        self.write_cache_file()
-
-    def create_cache_obj(self, nvidia_gpu_pci_bus):
-        return {
-            'nvidia_gpu_pci_bus': nvidia_gpu_pci_bus
-        }
-
-    def is_hybrid(self):
-        return 'hybrid' == self.current_mode
-
-    def get_nvidia_gpu_pci_bus(self):
-        return self.nvidia_gpu_pci_bus
-
-    @staticmethod
-    def delete_cache_file():
-        os.remove(CACHE_FILE_PATH)
-        os.removedirs(os.path.dirname(CACHE_FILE_PATH))
-        logging.debug(f"Removed file {CACHE_FILE_PATH}")
-
-    def read_cache_file(self):
-        from json import loads
-        if os.path.exists(CACHE_FILE_PATH):
-            with open(CACHE_FILE_PATH, 'r', encoding='utf-8') as f:
-                content = f.read()
-            self.obj = loads(content)
-            self.nvidia_gpu_pci_bus = self.obj['nvidia_gpu_pci_bus']
-        elif self.is_hybrid():
-            self.nvidia_gpu_pci_bus = get_nvidia_gpu_pci_bus()
-        else:
-            raise ValueError(
-                'No cache present. Operation requires that the system be in the hybrid Optimus mode')
-
-    @staticmethod
-    def show_cache_file():
-        content = f'ERROR: Could not read {CACHE_FILE_PATH}'
-        if os.path.exists(CACHE_FILE_PATH):
-            with open(CACHE_FILE_PATH, 'r', encoding='utf-8') as f:
-                content = f.read()
-        print(content)
-
-    def write_cache_file(self):
-        from json import dump
-        os.makedirs(os.path.dirname(CACHE_FILE_PATH), exist_ok=True)
-
-        with open(CACHE_FILE_PATH, 'w', encoding='utf-8') as f:
-            dump(self.obj, fp=f, indent=4, sort_keys=False)
-
-        logging.debug(f"Created file {CACHE_FILE_PATH}")
-
-
-def get_current_mode():
-    mode = 'hybrid'
-    if os.path.exists(BLACKLIST_PATH) and (os.path.exists(UDEV_INTEGRATED_PATH) or os.path.exists('/lib/udev/rules.d/50-remove-nvidia.rules')):
-        mode = 'integrated'
-    elif os.path.exists(XORG_PATH) and os.path.exists(MODESET_PATH):
-        mode = 'nvidia'
-    return mode
 
 
 if __name__ == '__main__':
