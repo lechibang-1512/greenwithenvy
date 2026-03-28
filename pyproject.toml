@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.7"
 authors = [
-    { name = "Victor Bayas", email = "victorsbayas@gmail.com" },
+    { name = "lechibang-1512", email = "throwawaybard76@gmail.com" },
 ]
 keywords = ["nvidia", "optimus", "prime", "gpu", "linux"]
 classifiers = [
@@ -24,7 +24,7 @@ classifiers = [
 greenwithenvy = "greenwithenvy:main"
 
 [project.urls]
-Homepage = "https://github.com/bayasdev/greenwithenvy"
+Homepage = "https://github.com/lechibang-1512/greenwithenvy"
 
 [tool.setuptools]
 py-modules = ["greenwithenvy"]

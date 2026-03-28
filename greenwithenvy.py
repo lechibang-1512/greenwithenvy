@@ -595,7 +595,7 @@ def get_igpu_vendor() -> Optional[str]:
         logging.warning(
             f"Found non-Nvidia GPU(s) with unrecognized vendor ID(s): "
             f"{', '.join(sorted(vendor_ids))}. "
-            f"Please report this at https://github.com/bayasdev/greenwithenvy/issues")
+            f"Please report this at https://github.com/lechibang-1512/greenwithenvy/issues")
     else:
         logging.warning("Could not find any integrated GPU")
     return None

@@ -7,9 +7,9 @@ setup(
     name='greenwithenvy',
     version=greenwithenvy.VERSION,
     description='Easy GPU switching for Nvidia Optimus laptops under Linux',
-    url='http://github.com/bayasdev/greenwithenvy',
-    author='Victor Bayas',
-    author_email='victorsbayas@gmail.com',
+    url='http://github.com/lechibang-1512/greenwithenvy',
+    author='lechibang-1512',
+    author_email='throwawaybard76@gmail.com',
     license='MIT',
     py_modules=['greenwithenvy'],
     entry_points={

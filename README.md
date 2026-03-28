@@ -1,7 +1,7 @@
 <div align="center">
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/bayasdev/greenwithenvy/raw/main/logos/dark.png">
-  <img alt="GreenWithEnvy Logo" src="https://github.com/bayasdev/greenwithenvy/raw/main/logos/light.png" height="100px">
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/lechibang-1512/greenwithenvy/raw/main/logos/dark.png">
+  <img alt="GreenWithEnvy Logo" src="https://github.com/lechibang-1512/greenwithenvy/raw/main/logos/light.png" height="100px">
 </picture>
 <br>
 Optimus made easy
@@ -14,7 +14,7 @@ GreenWithEnvy is a CLI tool that provides an easy way to switch between GPU mode
 
 ### 📖 License
 
-GreenWithEnvy is free and open-source software released under the [MIT](https://github.com/bayasdev/greenwithenvy/blob/main/LICENSE) license.
+GreenWithEnvy is free and open-source software released under the [MIT](https://github.com/lechibang-1512/greenwithenvy/blob/main/LICENSE) license.
 
 ### ⚠️ Disclaimer
 
@@ -25,8 +25,8 @@ Keep in mind any custom X.org configuration may get deleted or overwritten when 
 ## ✨ Features
 
 - 🐍 Written in Python 3+ for portability and compatibility
-- 🐧 Works across all major Linux distros ([tested distros](https://github.com/bayasdev/greenwithenvy/wiki/Frequently-Asked-Questions#tested-distros))
-- 🖥️ Supports GDM, SDDM and LightDM display managers ([manual setup instructions](https://github.com/bayasdev/greenwithenvy/wiki/Frequently-Asked-Questions#what-to-do-if-my-display-manager-is-not-supported) also available)
+- 🐧 Works across all major Linux distros ([tested distros](https://github.com/lechibang-1512/greenwithenvy/wiki/Frequently-Asked-Questions#tested-distros))
+- 🖥️ Supports GDM, SDDM and LightDM display managers ([manual setup instructions](https://github.com/lechibang-1512/greenwithenvy/wiki/Frequently-Asked-Questions#what-to-do-if-my-display-manager-is-not-supported) also available)
 - 🔋 Save battery with integrated graphics mode
 - 💻 PCI-Express Runtime D3 (RTD3) Power Management support for Turing and later
 - 🎮 Coolbits support for GPU overclocking
@@ -184,7 +184,7 @@ sudo greenwithenvy --cache-query
 
 ### Fedora
 
-Use the [COPR](https://copr.fedorainfracloud.org/coprs/sunwire/greenwithenvy/) maintained by [@sunwire](https://github.com/sunwire)
+Use the [COPR](https://copr.fedorainfracloud.org/coprs/sunwire/greenwithenvy/)
 
 1. Enable the repository with `sudo dnf copr enable sunwire/greenwithenvy`
 2. `sudo dnf install python3-greenwithenvy`
@@ -192,7 +192,7 @@ Use the [COPR](https://copr.fedorainfracloud.org/coprs/sunwire/greenwithenvy/) m
 
 ### Enterprise Linux + EPEL 9 (RHEL 9, Rocky Linux 9, CentOS Stream 9, Alma Linux 9 etc.)
 
-Use the [COPR](https://copr.fedorainfracloud.org/coprs/thonkdifferent/greenwithenvy/) maintained by [@thonkdifferent](https://github.com/thonkdifferent)
+Use the [COPR](https://copr.fedorainfracloud.org/coprs/thonkdifferent/greenwithenvy/)
 
 1. Enable the repository with `sudo dnf copr enable thonkdifferent/greenwithenvy`
 2. `sudo dnf install python3-greenwithenvy`
@@ -202,7 +202,7 @@ Use the [COPR](https://copr.fedorainfracloud.org/coprs/thonkdifferent/greenwithe
 
 Since [PEP668 adoption](https://www.linuxuprising.com/2023/03/next-debianubuntu-releases-will-likely.html) is no longer possible to install pip packages outside a virtual environment, instead use the provided deb package:
 
-1. Go to the [latest release page](https://github.com/bayasdev/greenwithenvy/releases/latest)
+1. Go to the [latest release page](https://github.com/lechibang-1512/greenwithenvy/releases/latest)
 2. Download the attached `python3-greenwithenvy_version.deb` package
 3. Install it with `sudo apt -y install ./python3-greenwithenvy_version.deb`
 4. Run `sudo greenwithenvy -s <MODE>` to switch graphics modes
@@ -214,7 +214,7 @@ If you're using Nix Flakes:
 - Script could be executed using this command:
 
 ```sh
-nix run github:bayasdev/greenwithenvy -- <args>
+nix run github:lechibang-1512/greenwithenvy -- <args>
 ```
 
 - For system-wide installation, add this flake to inputs in your configuration:
@@ -222,7 +222,7 @@ nix run github:bayasdev/greenwithenvy -- <args>
 ```sh
 inputs = {
   # ...
-  greenwithenvy.url = github:bayasdev/greenwithenvy
+  greenwithenvy.url = github:lechibang-1512/greenwithenvy
 };
 ```
 
@@ -232,11 +232,9 @@ And mention it in the packages like this:
 greenwithenvy.packages.x86_64-linux.default
 ```
 
-Thanks to [@ITesserakt](https://github.com/ITesserakt) for adding initial NixOS support!
-
 ### OSTree Distros (Silverblue, Kinoite, Bazzite, etc.)
 
-These distributions are also supported by the same COPR repo as Fedora Workstation. Use the [COPR](https://copr.fedorainfracloud.org/coprs/sunwire/greenwithenvy/) maintained by [@sunwire](https://github.com/sunwire).
+These distributions are also supported by the same COPR repo as Fedora Workstation. Use the [COPR](https://copr.fedorainfracloud.org/coprs/sunwire/greenwithenvy/).
 
 1. Enable the COPR by downloading the `.repo` file from the COPR page, linked above. Put the `.repo` file in `/etc/yum.repos.d`.
 2. Clean package cache with `rpm-ostree cleanup -m`.
@@ -246,7 +244,7 @@ These distributions are also supported by the same COPR repo as Fedora Workstati
 
 ### From source
 
-1. Clone this repository with `git clone https://github.com/bayasdev/greenwithenvy.git` or download the latest tarball from the releases page
+1. Clone this repository with `git clone https://github.com/lechibang-1512/greenwithenvy.git` or download the latest tarball from the releases page
 2. Run the script from the root of the repository like this `python ./greenwithenvy.py -s <MODE>`
 
 💡 Replace `python` with `python3` on Ubuntu/Debian
@@ -276,7 +274,7 @@ The [GPU profile selector](https://github.com/LorenzoMorelli/GPU_profile_selecto
 
 ### Black screen on Debian with Nvidia mode?
 
-Try adding `xrandr --auto` to your `~/.xsessionrc`. See https://github.com/bayasdev/greenwithenvy/issues/173#issuecomment-2205292306, also check the [Wiki](https://github.com/bayasdev/greenwithenvy/wiki/Frequently-Asked-Questions#what-to-do-if-my-display-manager-is-not-supported) for an alternative solution if this didn't work.
+Try adding `xrandr --auto` to your `~/.xsessionrc`. See https://github.com/lechibang-1512/greenwithenvy/issues/173#issuecomment-2205292306, also check the [Wiki](https://github.com/lechibang-1512/greenwithenvy/wiki/Frequently-Asked-Questions#what-to-do-if-my-display-manager-is-not-supported) for an alternative solution if this didn't work.
 
 ### `nvidia` kernel module is named `nvidia-current` on Debian
 
@@ -307,7 +305,7 @@ The below files are created by `greenwithenvy`, and you may want to remove them 
 
 ## ❓ Frequently Asked Questions (FAQ)
 
-[Read here](https://github.com/bayasdev/greenwithenvy/wiki/Frequently-Asked-Questions)
+[Read here](https://github.com/lechibang-1512/greenwithenvy/wiki/Frequently-Asked-Questions)
 
 ## 🐞 I have a problem
 
@@ -315,4 +313,4 @@ Open an issue and **don't forget to complete all the requested fields!**
 
 ## ☕️ Buy me a coffee
 
-[PayPal](https://www.paypal.com/paypalme/bayasdev)
+[PayPal](https://www.paypal.com/paypalme/lechibang-1512)
